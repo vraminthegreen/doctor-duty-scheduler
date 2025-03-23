@@ -20,11 +20,11 @@ class SchedulerModel:
         param cost_per_sparse_window >= 0;
         param penalty_for_not_preferred_shifts >= 0;
         param day_cost_modifier {DOCTORS, DAYS};
-        param fixed_shift {DOCTORS, DAYS} symbolic;
+        param fixed_shift {DOCTORS, DAYS} symbolic default ".";
         var x {DOCTORS, DAYS} binary;
         set REST_WINDOW_STARTS within DAYS;
         set WINDOW_STARTS within DAYS;
-        
+
         minimize Total_Cost:
             sum {d in DOCTORS, day in DAYS} day_cost[d, day] * x[d, day]
                 + sum {d in DOCTORS} penalty_for_not_preferred_shifts * abs(sum {day in DAYS} x[d, day] - preferred_shifts[d])
@@ -38,7 +38,7 @@ class SchedulerModel:
                     then cost_per_sparse_window
                     else 0
                 );
-                
+
         subject to One_Doctor_Per_Day {day in DAYS}:
             sum {d in DOCTORS} x[d, day] = 1;
 
@@ -50,13 +50,13 @@ class SchedulerModel:
 
         subject to Min_Rest_Period {d in DOCTORS diff {"Void"}, day in REST_WINDOW_STARTS}:
             x[d, day] + x[d, day + 1] + x[d, day + 2] <= 1;
-                       
+
         subject to Fixed_Shifts_Zero {d in DOCTORS, day in DAYS: fixed_shift[d, day] = "0"}:
             x[d, day] = 0;
 
         subject to Fixed_Shifts_One {d in DOCTORS, day in DAYS: fixed_shift[d, day] = "1"}:
             x[d, day] = 1;
-                
+                                                                     
         """)
 
     def set_data(self, doctors, days, day_cost, min_shifts, max_shifts,
@@ -88,3 +88,4 @@ class SchedulerModel:
 
     def get_total_cost(self):
         return self.ampl.getObjective("Total_Cost").value()
+    

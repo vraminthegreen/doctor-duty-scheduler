@@ -5,9 +5,17 @@ from SchedulerModel import SchedulerModel
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
-# TODO: empty preferred_shifts
+# TODO: rozpoznawanie dni tygodnia
+# TODO: kolorowanie dni tygodnia w arkuszu wynikowym
+# TODO: strimlite: hello world
+# TODO: strimlite: wybór credentials.json
+# TODO: strimlite: wybór arkusza
+# TODO: strimlite: wybór zakładki
+# TODO: generowanie harmonogramu
 # TODO: preferowane weekendowe
 # TODO: preferowane tygodniowe
+# TODO: strimlite: instrukcje, helpy, autorzy itp.
+# TODO: github
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
@@ -44,10 +52,11 @@ def process_worksheet( worksheet ) :
     # Wiersze danych z domyślną obsługą braków
     min_shifts = dict(zip(doctors, parse_int_with_default(data[1][1:], DEFAULT_MIN)))
     preferred_shifts = dict(zip(doctors, parse_int_with_default(data[2][1:], DEFAULT_PREFERRED)))
-    max_shifts = dict(zip(doctors, parse_int_with_default(data[4][1:], DEFAULT_MAX)))
+    max_shifts = dict(zip(doctors, parse_int_with_default(data[3][1:], DEFAULT_MAX)))
 
-    prefer_sparse     = dict(zip(doctors, [val.upper() == 'TRUE' for val in data[5][1:]]))
-    prefer_dense      = dict(zip(doctors, [val.upper() == 'TRUE' for val in data[6][1:]]))
+    prefer_sparse     = dict(zip(doctors, [val.upper() == 'TRUE' for val in data[6][1:]]))
+    prefer_dense      = dict(zip(doctors, [val.upper() == 'TRUE' for val in data[7][1:]]))
+
 
     day_index = 0
     for row in data[8:]:
@@ -69,8 +78,8 @@ def process_worksheet( worksheet ) :
                 fixed_shifts[(doctor, day_index)] = "0"
             elif value == "tak":
                 fixed_shifts[(doctor, day_index)] = "1"
-            else :
-                fixed_shifts[(doctor, day_index)] = "."
+            # else :
+            #     fixed_shifts[(doctor, day_index)] = "."
 
             if value == "chętnie":
                 day_cost[(doctor, day_index)] = COST_WILLING
@@ -79,12 +88,17 @@ def process_worksheet( worksheet ) :
             else:
                 day_cost[(doctor, day_index)] = BASE_COST
         
-        fixed_shifts[("Void",day_index)] = "."
-        day_cost[("Void",day_index)] = COST_VOID
+        # fixed_shifts[("Void",day_index)] = "."
+        # day_cost[("Void",day_index)] = COST_VOID
 
         day_index += 1
 
     days = list(range(day_index))
+
+    for d in doctors:
+        for day in days:
+            if (d, day) not in day_cost or day_cost[(d,day)] == None:
+                day_cost[(d, day)] = BASE_COST
 
     # Pozostałe stałe:
     cost_per_dense_window = 1
@@ -114,8 +128,29 @@ def process_worksheet( worksheet ) :
         cost_per_sparse_window = COST_WRONG_FREQUENCY,
         penalty_for_not_preferred_shifts = COST_NOT_PREFERRED_SHIFTS,
         fixed_shifts = fixed_shifts )
+    
+    # print("Min shifts:")
+    # for d in doctors:
+    #     print(f"  {d}: min={min_shifts.get(d)}, days={[i for (doc, i) in fixed_shifts if doc == d]}")
+    # print(">>> DEBUG MakA")
+    # print("Min shifts:", min_shifts["MakA"])
+    # print("Zakazane dni (fixed_shift=0):", [i for (d, i), v in fixed_shifts.items() if d == "MakA" and v == "0"])
+    for d in doctors:
+        missing = [day for day in days if (d, day) not in day_cost]
+        if missing:
+            print(f"⚠️  {d} brakuje kosztu dla dni: {missing}")
+
 
     model.solve()
+
+    # print("=== AFTER SOLVE, MakA ===")
+    # var_x = model.ampl.get_variable("x")
+    # x_vals = var_x.get_values().to_pandas()
+    # makA_rows = x_vals.loc[x_vals.index.get_level_values(0) == "MakA"]
+    # print(">>> x[MakA,*] dostępne zmienne:")
+    # print(makA_rows)
+    # print("~~~~~~~~~~~~~~~~~~~~~~~~~")
+
     print(model.get_schedule())
     print("Total Cost:", model.get_total_cost())
     return date_labels, doctors, model.get_schedule()
