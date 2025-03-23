@@ -19,8 +19,11 @@ DEFAULT_PREFERRED = 3
 DEFAULT_MAX = 10000
 DAY_COST = 1000
 BASE_COST = 1000
-COST_WILLING = 700
-COST_UNWILLING = 1300
+COST_WILLING = 970
+COST_UNWILLING = 1030
+COST_VOID = 100000
+COST_WRONG_FREQUENCY = 1
+COST_NOT_PREFERRED_SHIFTS = 100
 
 
 def parse_int_with_default(values, default):
@@ -36,6 +39,7 @@ def process_worksheet( worksheet ) :
 
     # Identyfikatory lekarzy (nagłówek, pierwsza kolumna pomijamy)
     doctors = data[0][1:]
+    doctors.append("Void")
     
     # Wiersze danych z domyślną obsługą braków
     min_shifts = dict(zip(doctors, parse_int_with_default(data[1][1:], DEFAULT_MIN)))
@@ -46,7 +50,7 @@ def process_worksheet( worksheet ) :
     prefer_dense      = dict(zip(doctors, [val.upper() == 'TRUE' for val in data[6][1:]]))
 
     day_index = 0
-    for row in data[7:]:
+    for row in data[8:]:
         if not any(cell.strip() for cell in row):
             continue  # pomiń puste wiersze
 
@@ -65,6 +69,8 @@ def process_worksheet( worksheet ) :
                 fixed_shifts[(doctor, day_index)] = "0"
             elif value == "tak":
                 fixed_shifts[(doctor, day_index)] = "1"
+            else :
+                fixed_shifts[(doctor, day_index)] = "."
 
             if value == "chętnie":
                 day_cost[(doctor, day_index)] = COST_WILLING
@@ -72,6 +78,9 @@ def process_worksheet( worksheet ) :
                 day_cost[(doctor, day_index)] = COST_UNWILLING
             else:
                 day_cost[(doctor, day_index)] = BASE_COST
+        
+        fixed_shifts[("Void",day_index)] = "."
+        day_cost[("Void",day_index)] = COST_VOID
 
         day_index += 1
 
@@ -82,11 +91,6 @@ def process_worksheet( worksheet ) :
     cost_per_sparse_window = 1
 
     # Dodajemy sztucznego lekarza Void
-    doctors.append("Void")
-
-    # Dla każdego dnia dodajemy koszt np. 1000
-    for day in days :
-        day_cost[("Void", day)] = 100000
 
     # Parametry dla Void-a
     min_shifts["Void"] = 0
@@ -95,175 +99,105 @@ def process_worksheet( worksheet ) :
     prefer_dense["Void"] = False
     prefer_sparse["Void"] = False
 
-    print( "Day costs:" )
-    print( day_cost )
+    model = SchedulerModel()
 
-    # Wywołanie Twojej funkcji
-    # model.set_data(
-    #     doctors=doctors,
-    #     days=days,
-    #     day_cost=day_cost,
-    #     min_shifts=min_shifts,
-    #     max_shifts=max_shifts,
-    #     preferred_shifts=preferred_shifts,
-    #     prefer_dense=prefer_dense,
-    #     prefer_sparse=prefer_sparse,
-    #     cost_per_dense_window=cost_per_dense_window,
-    #     cost_per_sparse_window=cost_per_sparse_window
-    # )
+    model.set_data(
+        doctors = doctors,
+        days = days,
+        day_cost = day_cost,
+        min_shifts = min_shifts,
+        max_shifts = max_shifts,
+        preferred_shifts = preferred_shifts,
+        prefer_dense = prefer_dense,
+        prefer_sparse = prefer_sparse,
+        cost_per_dense_window = COST_WRONG_FREQUENCY,
+        cost_per_sparse_window = COST_WRONG_FREQUENCY,
+        penalty_for_not_preferred_shifts = COST_NOT_PREFERRED_SHIFTS,
+        fixed_shifts = fixed_shifts )
 
-def access_spreadsheets() :
+    model.solve()
+    print(model.get_schedule())
+    print("Total Cost:", model.get_total_cost())
+    return date_labels, doctors, model.get_schedule()
+
+def export_schedule_to_full_sheet(spreadsheet, original_sheet, date_labels, doctors, schedule_df):
+    # Nowa nazwa zakładki
+    print("Doctors: {}".format(doctors))
+    new_sheet_name = f"{original_sheet.title}-full-sched"
+
+    # Sprawdź, czy zakładka już istnieje – jeśli tak, usuń
+    try:
+        existing = spreadsheet.worksheet(new_sheet_name)
+        spreadsheet.del_worksheet(existing)
+    except:
+        pass  # nie istnieje, to dobrze
+
+    # Utwórz nowy worksheet o odpowiednim rozmiarze
+    num_rows = len(date_labels) + 1  # +1 na nagłówek
+    num_cols = len(doctors) + 1      # +1 na kolumnę z datą
+    result_sheet = spreadsheet.add_worksheet(title=new_sheet_name, rows=str(num_rows), cols=str(num_cols))
+
+    # Przygotuj nagłówek
+    header = ["Data"] + doctors
+    values = [header]
+
+    # Upewnij się, że index0/index1 to kolumny, nie indeks
+    schedule_df = schedule_df.reset_index()
+    # Budujemy macierz wyników (1 –> TAK, 0 –> "")
+    for i, date in enumerate(date_labels):
+        row = [date]
+        for doctor in doctors:
+            val = schedule_df.loc[
+                (schedule_df["index0"] == doctor) & 
+                (schedule_df["index1"] == i), "x.val"
+            ]
+            row.append("TAK" if not val.empty and val.values[0] == 1 else "")
+        values.append(row)
+
+    # Wpisujemy dane
+    result_sheet.update(values)
+    print(f"✅ Exported schedule to full sheet: {new_sheet_name}")
+
+def export_schedule_to_short_sheet(spreadsheet, original_sheet, date_labels, doctors, schedule_df):
+    new_sheet_name = f"{original_sheet.title}-short-sched"
+
+    try:
+        existing = spreadsheet.worksheet(new_sheet_name)
+        spreadsheet.del_worksheet(existing)
+    except:
+        pass
+
+    # Zakładamy, że schedule_df ma MultiIndex (doctor, day)
+    schedule_df = schedule_df.reset_index()
+
+    values = [["Data", "Dyżurny"]]
+
+    for i, date in enumerate(date_labels):
+        # Filtrujemy rząd z x.val == 1 dla danego dnia
+        row = schedule_df[(schedule_df["index1"] == i) & (schedule_df["x.val"] == 1)]
+
+        # Sprawdź czy ktoś miał dyżur (teoretycznie zawsze powinien ktoś być)
+        doctor = row["index0"].values[0] if not row.empty else "???"
+        values.append([date, doctor])
+
+    result_sheet = spreadsheet.add_worksheet(title=new_sheet_name, rows=str(len(values)), cols="2")
+    result_sheet.update(values)
+
+    print(f"✅ Exported short schedule to short sheet: {new_sheet_name}")    
+
+def process_spreadsheets() :
     # sheet = client.open("Graf Lekarzy").worksheet("Dane")  # Arkusz musi istnieć
     print("Spreadsheets:")
     for ss in client.openall():
         print(f"    {ss.title} – {ss.id}")
         for worksheet in ss.worksheets():
+            if worksheet.title.endswith("-sched") : continue
             print(f"        🗂️ Processing sheet: {worksheet.title}")
-            process_worksheet( worksheet )
-
-
-def solve_optimization2():
-    ampl = AMPL()
-
-    # Ustawienie solwera na HiGHS
-    ampl.setOption("solver", "highs")
-
-    # Definicja modelu AMPL
-    ampl.eval(r"""
-    set DOCTORS;
-    set DAYS;
-    param day_cost {DOCTORS, DAYS} >= 0;
-    param min_shifts {DOCTORS} >= 0;
-    param max_shifts {DOCTORS} >= 0;
-    param preferred_shifts {DOCTORS} >= 0;
-    param prefer_dense {DOCTORS} binary;
-    param prefer_sparse {DOCTORS} binary;
-    param cost_per_dense_window >= 0;
-    param cost_per_sparse_window >= 0;
-    param day_cost_modifier {DOCTORS, DAYS};
-    var x {DOCTORS, DAYS} binary;
-    set REST_WINDOW_STARTS within DAYS;
-    set WINDOW_STARTS within DAYS;
-    
-    minimize Total_Cost:
-        sum {d in DOCTORS, day in DAYS} day_cost[d, day] * x[d, day]
-            + sum {d in DOCTORS} 1 * abs(sum {day in DAYS} x[d, day] - preferred_shifts[d])
-            - sum {d in DOCTORS, t in WINDOW_STARTS} (
-                if prefer_dense[d] = 1 and sum {k in 0..4} x[d, t + k] >= 2
-                then cost_per_dense_window
-                else 0
-              )
-            + sum {d in DOCTORS, t in WINDOW_STARTS} (
-                if prefer_sparse[d] = 1 and sum {k in 0..4} x[d, t + k] >= 2
-                then cost_per_sparse_window
-                else 0
-              );
-              
-    subject to Restr1 { day in { 0, 6 } }:
-        x["Natalka", day] = 0;
-              
-    subject to One_Doctor_Per_Day {day in DAYS}:
-        sum {d in DOCTORS} x[d, day] = 1;
-
-    subject to Min_Shifts {d in DOCTORS diff {"Void"}}:
-        sum {day in DAYS} x[d, day] >= min_shifts[d];
-
-    subject to Max_Shifts {d in DOCTORS diff {"Void"}}:
-        sum {day in DAYS} x[d, day] <= max_shifts[d];
-
-    subject to Min_Rest_Period {d in DOCTORS diff {"Void"}, day in REST_WINDOW_STARTS}:
-        x[d, day] + x[d, day + 1] + x[d, day + 2] <= 1;              
-              
-    """)
-
-    # Przypisanie wartości
-    ampl.eval(r"""
-    data;
-    set DOCTORS := Asia Ania Natalka Gosia Void;
-    set DAYS := 0 1 2 3 4 5 6 7 8 9 10 11;
-    set REST_WINDOW_STARTS := 0 1 2 3 4 5 6 7 8 9;
-    set WINDOW_STARTS := 0 1 2 3 4 5 6 7;
-    param min_shifts := Asia 1 Ania 1 Natalka 1 Gosia 1 Void 0;
-    param max_shifts := Asia 3 Ania 6 Natalka 6 Gosia 6 Void 1000;
-    param cost_per_dense_window := 1;              
-    param cost_per_sparse_window := 1;
-    param preferred_shifts :=
-        Asia 2
-        Ania 4
-        Natalka 6
-        Gosia 0
-        Void 0;
-    param prefer_dense :=
-        Asia 0
-        Ania 0
-        Natalka 0
-        Gosia 0
-        Void 0;
-    param prefer_sparse :=
-        Asia 1
-        Ania 0
-        Natalka 0
-        Gosia 0
-        Void 0;
-    param day_cost : 
-        0   1   2   3   4   5   6   7   8   9   10 11 :=
-        Asia     10   10   10  10   10   10   10   7   7   7   7 10
-        Ania     10   10   10  10   10   10   10   10   10   10   10 10
-        Natalka  10   7   10  13   10   7   10   10   10   10   10 10
-        Gosia    10   10   10   10   10   10   10   10   10   10   10 10
-        Void     1000   1000   1000   1000   1000   1000   1000   1000   1000   1000   1000 1000;
-    """)
-
-    # Rozwiązanie problemu
-    ampl.solve()
-
-    # Pobranie i wydrukowanie wyników
-    x_values = ampl.getVariable("x").getValues()
-    print(x_values)
-
-    # Pobranie wartości funkcji celu
-    total_cost = ampl.getObjective("Total_Cost").value()
-    print(f"Total Cost: {total_cost}")
-
-def solve_optimization() :
-    model = SchedulerModel()
-    doctors=["Asia", "Ania", "Natalka", "Gosia", "Void"]
-    dcm = {}
-    for doc in doctors :
-        for day in range(0,11) :
-            if doc == 'Void' :
-                dcm[(doc,day)] = 1000
-            else :
-                dcm[(doc,day)] = 10
-    dcm[('Asia',6)] = 7
-    dcm[('Asia',7)] = 7
-    dcm[('Asia',8)] = 7
-    dcm[('Asia',9)] = 7
-    dcm[('Natalka',1)] = 7
-    dcm[('Natalka',3)] = 13
-    dcm[('Natalka',5)] = 7
-
-    model.set_data(
-        doctors=doctors,
-        days=list(range(11)),
-        day_cost=dcm,
-        min_shifts={"Asia": 1, "Ania": 1, "Natalka": 1, "Gosia": 1, "Void": 0},
-        max_shifts={"Asia": 3, "Ania" : 3, "Natalka": 5, "Gosia": 6, "Void": 1000},
-        preferred_shifts={"Asia": 2, "Ania" : 2, "Natalka": 3, "Gosia": 1, "Void": 0},
-        prefer_dense={"Asia": 1, "Ania" : 1, "Natalka": 0, "Gosia": 0, "Void": 0},
-        prefer_sparse={"Asia": 0, "Ania" : 1, "Natalka": 0, "Gosia": 0, "Void": 0},
-        cost_per_dense_window=1,
-        cost_per_sparse_window=1,
-    )
-    model.solve()
-    print(model.get_schedule())
-    print("Total Cost:", model.get_total_cost())
-
-
+            date_labels, doctors, schedule = process_worksheet( worksheet )
+            export_schedule_to_full_sheet(ss, worksheet, date_labels, doctors, schedule)
+            export_schedule_to_short_sheet(ss, worksheet, date_labels, doctors, schedule)
 
 if __name__ == "__main__":
     print("Alive")
-    # solve_optimization2()
-    access_spreadsheets()
-    # solve_optimization()
+    process_spreadsheets()
 

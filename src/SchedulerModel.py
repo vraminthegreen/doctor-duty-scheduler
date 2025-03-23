@@ -18,6 +18,7 @@ class SchedulerModel:
         param prefer_sparse {DOCTORS} binary;
         param cost_per_dense_window >= 0;
         param cost_per_sparse_window >= 0;
+        param penalty_for_not_preferred_shifts >= 0;
         param day_cost_modifier {DOCTORS, DAYS};
         param fixed_shift {DOCTORS, DAYS} symbolic;
         var x {DOCTORS, DAYS} binary;
@@ -26,7 +27,7 @@ class SchedulerModel:
         
         minimize Total_Cost:
             sum {d in DOCTORS, day in DAYS} day_cost[d, day] * x[d, day]
-                + sum {d in DOCTORS} 1 * abs(sum {day in DAYS} x[d, day] - preferred_shifts[d])
+                + sum {d in DOCTORS} penalty_for_not_preferred_shifts * abs(sum {day in DAYS} x[d, day] - preferred_shifts[d])
                 - sum {d in DOCTORS, t in WINDOW_STARTS} (
                     if prefer_dense[d] = 1 and sum {k in 0..4} x[d, t + k] >= 2
                     then cost_per_dense_window
@@ -37,9 +38,6 @@ class SchedulerModel:
                     then cost_per_sparse_window
                     else 0
                 );
-                
-        subject to Restr1 { day in { 0, 6 } }:
-            x["Natalka", day] = 0;
                 
         subject to One_Doctor_Per_Day {day in DAYS}:
             sum {d in DOCTORS} x[d, day] = 1;
@@ -63,7 +61,7 @@ class SchedulerModel:
 
     def set_data(self, doctors, days, day_cost, min_shifts, max_shifts,
                  preferred_shifts, prefer_dense, prefer_sparse,
-                 cost_per_dense_window, cost_per_sparse_window,
+                 cost_per_dense_window, cost_per_sparse_window, penalty_for_not_preferred_shifts,
                  fixed_shifts ):
         self.ampl.set['DOCTORS'] = doctors
         self.ampl.set['DAYS'] = days
@@ -79,6 +77,7 @@ class SchedulerModel:
         self.ampl.param['prefer_sparse'].setValues(prefer_sparse)
         self.ampl.param['cost_per_dense_window'] = cost_per_dense_window
         self.ampl.param['cost_per_sparse_window'] = cost_per_sparse_window
+        self.ampl.param['penalty_for_not_preferred_shifts'] = penalty_for_not_preferred_shifts
         self.ampl.param['fixed_shift'].setValues(fixed_shifts)
 
     def solve(self):
