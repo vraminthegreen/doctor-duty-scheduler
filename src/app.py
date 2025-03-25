@@ -8,6 +8,17 @@ import sys
 
 # to run: python3 -m streamlit run app.py
 
+# TODO: rozpoznawanie dni tygodnia
+# TODO: kolorowanie dni tygodnia w arkuszu wynikowym
+# TODO: preferowane weekendowe
+# TODO: preferowane tygodniowe
+# TODO: bazowo preferowane rozstrzelone dyzury
+# TODO: mozliwosc wylaczania lekarzy
+# TODO: opis debugowania rozkladu dla usera (przez wylaczanie lekarzy)
+# TODO: mail do autora
+# TODO: github
+
+
 def TitleDescription() :
     st.set_page_config(page_title="Doctor Duty Scheduler", page_icon="🩺")
 
@@ -102,9 +113,14 @@ def GenerateScheduleButtonWithAction( spreadsheet, worksheet ) :
             sys.stdout = mystdout = StringIO()
 
             # Uruchamiamy przetwarzanie
-            date_labels, doctors, schedule = Processor.process_worksheet(worksheet)
-            Processor.export_schedule_to_full_sheet(spreadsheet, worksheet, date_labels, doctors, schedule)
-            Processor.export_schedule_to_short_sheet(spreadsheet, worksheet, date_labels, doctors, schedule)
+            processor = Processor.Processor()
+            processor.process_worksheet( spreadsheet, worksheet )
+            processor.export_schedule_to_full_sheet()
+            processor.export_schedule_to_short_sheet()
+
+            # date_labels, doctors, schedule = Processor.process_worksheet(worksheet)
+            # Processor.export_schedule_to_full_sheet(spreadsheet, worksheet, date_labels, doctors, schedule)
+            # Processor.export_schedule_to_short_sheet(spreadsheet, worksheet, date_labels, doctors, schedule)
 
             # Przywracamy stdout
             sys.stdout = old_stdout

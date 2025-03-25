@@ -4,18 +4,8 @@ import amplpy
 from SchedulerModel import SchedulerModel
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
 
-# TODO: rozpoznawanie dni tygodnia
-# TODO: kolorowanie dni tygodnia w arkuszu wynikowym
-# TODO: strimlite: hello world
-# TODO: strimlite: wybór credentials.json
-# TODO: strimlite: wybór arkusza
-# TODO: strimlite: wybór zakładki
-# TODO: generowanie harmonogramu
-# TODO: preferowane weekendowe
-# TODO: preferowane tygodniowe
-# TODO: strimlite: instrukcje, helpy, autorzy itp.
-# TODO: github
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
@@ -37,188 +27,207 @@ COST_NOT_PREFERRED_SHIFTS = 100
 def parse_int_with_default(values, default):
     return [int(v) if v.strip().isdigit() else default for v in values]
 
-def process_worksheet( worksheet ) :
-    fixed_shifts = {}  # (doctor, day_index) -> "0" / "1"
-    day_cost = {}
-    date_labels = []   # tylko informacyjnie
-
-    # Wczytaj dane jako lista list
-    data = worksheet.get_all_values()
-
-    # Identyfikatory lekarzy (nagłówek, pierwsza kolumna pomijamy)
-    doctors = data[0][1:]
-    doctors.append("Void")
-    
-    # Wiersze danych z domyślną obsługą braków
-    min_shifts = dict(zip(doctors, parse_int_with_default(data[1][1:], DEFAULT_MIN)))
-    preferred_shifts = dict(zip(doctors, parse_int_with_default(data[2][1:], DEFAULT_PREFERRED)))
-    max_shifts = dict(zip(doctors, parse_int_with_default(data[3][1:], DEFAULT_MAX)))
-
-    prefer_sparse     = dict(zip(doctors, [val.upper() == 'TRUE' for val in data[6][1:]]))
-    prefer_dense      = dict(zip(doctors, [val.upper() == 'TRUE' for val in data[7][1:]]))
-
-
-    day_index = 0
-    for row in data[8:]:
-        if not any(cell.strip() for cell in row):
-            continue  # pomiń puste wiersze
-
-        date_str = row[0].strip()
-        if not date_str:
+def parse_date_flex(date_str):
+    # Usuń spacje, zamień nietypowe separatory na '-'
+    cleaned = ''.join(c if c.isalnum() else '-' for c in date_str.strip())
+    # Przykładowe formaty dat
+    formats = [
+        "%Y-%m-%d",  # 2025-05-01
+        "%d-%m-%Y",  # 01-05-2025
+        "%m-%d-%Y",  # 05-01-2025 (ostrożnie, bo kolizja z dd-mm)
+        "%d-%b-%Y",  # 01-May-2025
+    ]
+    for fmt in formats:
+        try:
+            return datetime.strptime(cleaned, fmt)
+        except ValueError:
             continue
+    # Jeśli nie udało się sparsować
+    return None
 
-        date_labels.append(date_str)
-        entries = row[1:]
+class Processor :
 
-        for i, entry in enumerate(entries):
-            doctor = doctors[i]
-            value = entry.strip().lower()
+    def __init__(self):
+        self.fixed_shifts = {}  # (doctor, day_index) -> "0" / "1"
+        self.day_cost = {}
+        self.date_labels = []
+        self.dates = []
+        self.weekend = []
 
-            if value == "nie":
-                fixed_shifts[(doctor, day_index)] = "0"
-            elif value == "tak":
-                fixed_shifts[(doctor, day_index)] = "1"
-            # else :
-            #     fixed_shifts[(doctor, day_index)] = "."
+    def process_worksheet( self, spreadsheet, worksheet ) :
 
-            if value == "chętnie":
-                day_cost[(doctor, day_index)] = COST_WILLING
-            elif value == "niechętnie":
-                day_cost[(doctor, day_index)] = COST_UNWILLING
-            else:
-                day_cost[(doctor, day_index)] = BASE_COST
+        # Wczytaj dane jako lista list
+        self.spreadsheet = spreadsheet
+        self.worksheet = worksheet
+        data = worksheet.get_all_values()
+
+        # Identyfikatory lekarzy (nagłówek, pierwsza kolumna pomijamy)
+        self.doctors = data[0][1:]
+        self.doctors.append("Void")
         
-        # fixed_shifts[("Void",day_index)] = "."
-        # day_cost[("Void",day_index)] = COST_VOID
+        # Wiersze danych z domyślną obsługą braków
+        self.min_shifts = dict(zip(self.doctors, parse_int_with_default(data[1][1:], DEFAULT_MIN)))
+        self.preferred_shifts = dict(zip(self.doctors, parse_int_with_default(data[2][1:], DEFAULT_PREFERRED)))
+        self.max_shifts = dict(zip(self.doctors, parse_int_with_default(data[3][1:], DEFAULT_MAX)))
 
-        day_index += 1
+        prefer_sparse     = dict(zip(self.doctors, [val.upper() == 'TRUE' for val in data[6][1:]]))
+        prefer_dense      = dict(zip(self.doctors, [val.upper() == 'TRUE' for val in data[7][1:]]))
 
-    days = list(range(day_index))
+        day_index = 0
+        for row in data[8:]:
+            if not any(cell.strip() for cell in row):
+                continue  # pomiń puste wiersze
 
-    for d in doctors:
-        for day in days:
-            if (d, day) not in day_cost or day_cost[(d,day)] == None:
-                day_cost[(d, day)] = BASE_COST
+            date_str = row[0].strip()
+            if not date_str:
+                continue
 
-    # Pozostałe stałe:
-    cost_per_dense_window = 1
-    cost_per_sparse_window = 1
+            self.date_labels.append(date_str)
 
-    # Dodajemy sztucznego lekarza Void
+            parsed_date = parse_date_flex(date_str)
+            if parsed_date:
+                self.dates.append(parsed_date)
+                self.weekend.append(1 if parsed_date.weekday() >= 5 else 0)  # 5=Saturday, 6=Sunday
+            else :
+                print(f"⚠️ Could not parse date '{date_str}', skipping row.")
+                self.dates.append(None)
+                self.weekend.append(0)
+            entries = row[1:]
 
-    # Parametry dla Void-a
-    min_shifts["Void"] = 0
-    preferred_shifts["Void"] = 0
-    max_shifts["Void"] = 10000
-    prefer_dense["Void"] = False
-    prefer_sparse["Void"] = False
+            for i, entry in enumerate(entries):
+                doctor = self.doctors[i]
+                value = entry.strip().lower()
 
-    model = SchedulerModel()
+                if value == "nie":
+                    self.fixed_shifts[(doctor, day_index)] = "0"
+                elif value == "tak":
+                    self.fixed_shifts[(doctor, day_index)] = "1"
+                # else :
+                #     fixed_shifts[(doctor, day_index)] = "."
 
-    model.set_data(
-        doctors = doctors,
-        days = days,
-        day_cost = day_cost,
-        min_shifts = min_shifts,
-        max_shifts = max_shifts,
-        preferred_shifts = preferred_shifts,
-        prefer_dense = prefer_dense,
-        prefer_sparse = prefer_sparse,
-        cost_per_dense_window = COST_WRONG_FREQUENCY,
-        cost_per_sparse_window = COST_WRONG_FREQUENCY,
-        penalty_for_not_preferred_shifts = COST_NOT_PREFERRED_SHIFTS,
-        fixed_shifts = fixed_shifts )
-    
-    # print("Min shifts:")
-    # for d in doctors:
-    #     print(f"  {d}: min={min_shifts.get(d)}, days={[i for (doc, i) in fixed_shifts if doc == d]}")
-    # print(">>> DEBUG MakA")
-    # print("Min shifts:", min_shifts["MakA"])
-    # print("Zakazane dni (fixed_shift=0):", [i for (d, i), v in fixed_shifts.items() if d == "MakA" and v == "0"])
-    for d in doctors:
-        missing = [day for day in days if (d, day) not in day_cost]
-        if missing:
-            print(f"⚠️  {d} brakuje kosztu dla dni: {missing}")
+                if value == "chętnie":
+                    self.day_cost[(doctor, day_index)] = COST_WILLING
+                elif value == "niechętnie":
+                    self.day_cost[(doctor, day_index)] = COST_UNWILLING
+                else:
+                    self.day_cost[(doctor, day_index)] = BASE_COST
+            
+            # fixed_shifts[("Void",day_index)] = "."
+            # day_cost[("Void",day_index)] = COST_VOID
 
+            day_index += 1
 
-    model.solve()
+        self.days = list(range(day_index))
 
-    # print("=== AFTER SOLVE, MakA ===")
-    # var_x = model.ampl.get_variable("x")
-    # x_vals = var_x.get_values().to_pandas()
-    # makA_rows = x_vals.loc[x_vals.index.get_level_values(0) == "MakA"]
-    # print(">>> x[MakA,*] dostępne zmienne:")
-    # print(makA_rows)
-    # print("~~~~~~~~~~~~~~~~~~~~~~~~~")
+        for d in self.doctors:
+            for day in self.days:
+                if (d, day) not in self.day_cost or self.day_cost[(d,day)] == None:
+                    self.day_cost[(d, day)] = BASE_COST
 
-    print(model.get_schedule())
-    print("Total Cost:", model.get_total_cost())
-    return date_labels, doctors, model.get_schedule()
+        # Pozostałe stałe:
+        cost_per_dense_window = 1
+        cost_per_sparse_window = 1
 
-def export_schedule_to_full_sheet(spreadsheet, original_sheet, date_labels, doctors, schedule_df):
-    # Nowa nazwa zakładki
-    print("Doctors: {}".format(doctors))
-    new_sheet_name = f"{original_sheet.title}-full-sched"
+        # Dodajemy sztucznego lekarza Void
 
-    # Sprawdź, czy zakładka już istnieje – jeśli tak, usuń
-    try:
-        existing = spreadsheet.worksheet(new_sheet_name)
-        spreadsheet.del_worksheet(existing)
-    except:
-        pass  # nie istnieje, to dobrze
+        # Parametry dla Void-a
+        self.min_shifts["Void"] = 0
+        self.preferred_shifts["Void"] = 0
+        self.max_shifts["Void"] = 10000
+        prefer_dense["Void"] = False
+        prefer_sparse["Void"] = False
 
-    # Utwórz nowy worksheet o odpowiednim rozmiarze
-    num_rows = len(date_labels) + 1  # +1 na nagłówek
-    num_cols = len(doctors) + 1      # +1 na kolumnę z datą
-    result_sheet = spreadsheet.add_worksheet(title=new_sheet_name, rows=str(num_rows), cols=str(num_cols))
+        model = SchedulerModel()
 
-    # Przygotuj nagłówek
-    header = ["Data"] + doctors
-    values = [header]
+        model.set_data(
+            doctors = self.doctors,
+            days = self.days,
+            day_cost = self.day_cost,
+            min_shifts = self.min_shifts,
+            max_shifts = self.max_shifts,
+            preferred_shifts = self.preferred_shifts,
+            prefer_dense = prefer_dense,
+            prefer_sparse = prefer_sparse,
+            cost_per_dense_window = COST_WRONG_FREQUENCY,
+            cost_per_sparse_window = COST_WRONG_FREQUENCY,
+            penalty_for_not_preferred_shifts = COST_NOT_PREFERRED_SHIFTS,
+            fixed_shifts = self.fixed_shifts )
+        
+        for d in self.doctors:
+            missing = [day for day in self.days if (d, day) not in self.day_cost]
+            if missing:
+                print(f"⚠️  {d} brakuje kosztu dla dni: {missing}")
 
-    # Upewnij się, że index0/index1 to kolumny, nie indeks
-    schedule_df = schedule_df.reset_index()
-    # Budujemy macierz wyników (1 –> TAK, 0 –> "")
-    for i, date in enumerate(date_labels):
-        row = [date]
-        for doctor in doctors:
-            val = schedule_df.loc[
-                (schedule_df["index0"] == doctor) & 
-                (schedule_df["index1"] == i), "x.val"
-            ]
-            row.append("TAK" if not val.empty and val.values[0] == 1 else "")
-        values.append(row)
+        model.solve()
 
-    # Wpisujemy dane
-    result_sheet.update(values)
-    print(f"✅ Exported schedule to full sheet: {new_sheet_name}")
+        print(model.get_schedule())
+        print("Total Cost:", model.get_total_cost())
+        self.schedule_df = model.get_schedule()
 
-def export_schedule_to_short_sheet(spreadsheet, original_sheet, date_labels, doctors, schedule_df):
-    new_sheet_name = f"{original_sheet.title}-short-sched"
+    def export_schedule_to_full_sheet(self):
+        # Nowa nazwa zakładki
+        print("Doctors: {}".format(self.doctors))
+        new_sheet_name = f"{self.worksheet.title}-full-sched"
 
-    try:
-        existing = spreadsheet.worksheet(new_sheet_name)
-        spreadsheet.del_worksheet(existing)
-    except:
-        pass
+        # Sprawdź, czy zakładka już istnieje – jeśli tak, usuń
+        try:
+            existing = self.spreadsheet.worksheet(new_sheet_name)
+            self.spreadsheet.del_worksheet(existing)
+        except:
+            pass  # nie istnieje, to dobrze
 
-    # Zakładamy, że schedule_df ma MultiIndex (doctor, day)
-    schedule_df = schedule_df.reset_index()
+        # Utwórz nowy worksheet o odpowiednim rozmiarze
+        num_rows = len(self.date_labels) + 1  # +1 na nagłówek
+        num_cols = len(self.doctors) + 1      # +1 na kolumnę z datą
+        result_sheet = self.spreadsheet.add_worksheet(title=new_sheet_name, rows=str(num_rows), cols=str(num_cols))
 
-    values = [["Data", "Dyżurny"]]
+        # Przygotuj nagłówek
+        header = ["Data"] + self.doctors
+        values = [header]
 
-    for i, date in enumerate(date_labels):
-        # Filtrujemy rząd z x.val == 1 dla danego dnia
-        row = schedule_df[(schedule_df["index1"] == i) & (schedule_df["x.val"] == 1)]
+        # Upewnij się, że index0/index1 to kolumny, nie indeks
+        self.schedule_df = self.schedule_df.reset_index()
+        # Budujemy macierz wyników (1 –> TAK, 0 –> "")
+        for i, date in enumerate(self.date_labels):
+            row = [date]
+            for doctor in self.doctors:
+                val = self.schedule_df.loc[
+                    (self.schedule_df["index0"] == doctor) & 
+                    (self.schedule_df["index1"] == i), "x.val"
+                ]
+                row.append("TAK" if not val.empty and val.values[0] == 1 else "")
+            values.append(row)
 
-        # Sprawdź czy ktoś miał dyżur (teoretycznie zawsze powinien ktoś być)
-        doctor = row["index0"].values[0] if not row.empty else "???"
-        values.append([date, doctor])
+        # Wpisujemy dane
+        result_sheet.update(values)
+        print(f"✅ Exported schedule to full sheet: {new_sheet_name}")
 
-    result_sheet = spreadsheet.add_worksheet(title=new_sheet_name, rows=str(len(values)), cols="2")
-    result_sheet.update(values)
+    def export_schedule_to_short_sheet(self):
+        new_sheet_name = f"{self.worksheet.title}-short-sched"
 
-    print(f"✅ Exported short schedule to short sheet: {new_sheet_name}")    
+        try:
+            existing = self.spreadsheet.worksheet(new_sheet_name)
+            self.spreadsheet.del_worksheet(existing)
+        except:
+            pass
+
+        # Zakładamy, że schedule_df ma MultiIndex (doctor, day)
+        self.schedule_df = self.schedule_df.reset_index()
+
+        values = [["Data", "Dyżurny"]]
+
+        for i, date in enumerate(self.date_labels):
+            # Filtrujemy rząd z x.val == 1 dla danego dnia
+            row = self.schedule_df[(self.schedule_df["index1"] == i) & (self.schedule_df["x.val"] == 1)]
+
+            # Sprawdź czy ktoś miał dyżur (teoretycznie zawsze powinien ktoś być)
+            doctor = row["index0"].values[0] if not row.empty else "???"
+            values.append([date, doctor])
+
+        result_sheet = self.spreadsheet.add_worksheet(title=new_sheet_name, rows=str(len(values)), cols="2")
+        result_sheet.update(values)
+
+        print(f"✅ Exported short schedule to short sheet: {new_sheet_name}")    
 
 def process_spreadsheets() :
     # sheet = client.open("Graf Lekarzy").worksheet("Dane")  # Arkusz musi istnieć
@@ -228,9 +237,10 @@ def process_spreadsheets() :
         for worksheet in ss.worksheets():
             if worksheet.title.endswith("-sched") : continue
             print(f"        🗂️ Processing sheet: {worksheet.title}")
-            date_labels, doctors, schedule = process_worksheet( worksheet )
-            export_schedule_to_full_sheet(ss, worksheet, date_labels, doctors, schedule)
-            export_schedule_to_short_sheet(ss, worksheet, date_labels, doctors, schedule)
+            processor = Processor()
+            processor.process_worksheet( ss, worksheet )
+            processor.export_schedule_to_full_sheet()
+            processor.export_schedule_to_short_sheet()
 
 if __name__ == "__main__":
     print("Alive")
