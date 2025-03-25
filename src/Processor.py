@@ -5,7 +5,7 @@ from SchedulerModel import SchedulerModel
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
-
+from gspread_formatting import CellFormat, TextFormat, format_cell_ranges
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
@@ -200,6 +200,7 @@ class Processor :
 
         # Wpisujemy dane
         result_sheet.update(values)
+        self.format_weekends( result_sheet )
         print(f"✅ Exported schedule to full sheet: {new_sheet_name}")
 
     def export_schedule_to_short_sheet(self):
@@ -226,8 +227,24 @@ class Processor :
 
         result_sheet = self.spreadsheet.add_worksheet(title=new_sheet_name, rows=str(len(values)), cols="2")
         result_sheet.update(values)
+        self.format_weekends( result_sheet )
 
-        print(f"✅ Exported short schedule to short sheet: {new_sheet_name}")    
+        print(f"✅ Exported short schedule to short sheet: {new_sheet_name}")
+    
+    def format_weekends( self, result_sheet ) :
+
+        # Komórki z datami zaczynają się od drugiego wiersza (bo pierwszy to nagłówek)
+        red_text = CellFormat(textFormat=TextFormat(foregroundColor={"red": 1, "green": 0, "blue": 0}))
+
+        # Zakładamy, że lista weekend ma tyle samo elementów co date_labels
+        ranges_to_format = []
+        for i, is_weekend in enumerate(self.weekend):
+            if is_weekend:
+                # Wiersze w Sheets zaczynają się od 1, więc +2 (bo nagłówek i 0-indeks)
+                row = i + 2
+                ranges_to_format.append((f"A{row}", red_text))
+
+        format_cell_ranges(result_sheet, ranges_to_format)
 
 def process_spreadsheets() :
     # sheet = client.open("Graf Lekarzy").worksheet("Dane")  # Arkusz musi istnieć

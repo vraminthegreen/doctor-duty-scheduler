@@ -12,4 +12,5 @@ openpyxl
 pandas
 streamlit==1.42.0
 gspread
+gspread-formatting
 oauth2client

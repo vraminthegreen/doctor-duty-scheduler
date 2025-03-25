@@ -8,8 +8,6 @@ import sys
 
 # to run: python3 -m streamlit run app.py
 
-# TODO: rozpoznawanie dni tygodnia
-# TODO: kolorowanie dni tygodnia w arkuszu wynikowym
 # TODO: preferowane weekendowe
 # TODO: preferowane tygodniowe
 # TODO: bazowo preferowane rozstrzelone dyzury
