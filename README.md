@@ -53,12 +53,16 @@ source venv/bin/activate
 
 ```bash
 pip install -r requirements.txt
+# or if you want to use specific pythin version
+python3 -m pip install -r requirements.txt
 ```
 
 ### 4. Run the App
 
 ```bash
 streamlit run app.py
+# or
+python3 -m streamlit run app.py
 ```
 
 ---
