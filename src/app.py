@@ -8,13 +8,9 @@ import sys
 
 # to run: python3 -m streamlit run app.py
 
-# TODO: preferowane weekendowe
-# TODO: preferowane tygodniowe
-# TODO: bazowo preferowane rozstrzelone dyzury
-# TODO: mozliwosc wylaczania lekarzy
+# TODO: github
 # TODO: opis debugowania rozkladu dla usera (przez wylaczanie lekarzy)
 # TODO: mail do autora
-# TODO: github
 
 
 def TitleDescription() :
@@ -91,7 +87,6 @@ If your spreadsheet is missing, make sure it is **shared** with your service acc
             worksheet_titles = [ws.title for ws in spreadsheet.worksheets() if not ws.title.endswith("-sched")]
             selected_worksheet_name = st.selectbox("Select a worksheet from the list below:", worksheet_titles)
 
-
             if selected_worksheet_name:
                 worksheet = spreadsheet.worksheet(selected_worksheet_name)
                 st.success(f"Selected: **{spreadsheet.title} → {worksheet.title}**")
@@ -116,10 +111,6 @@ def GenerateScheduleButtonWithAction( spreadsheet, worksheet ) :
             processor.export_schedule_to_full_sheet()
             processor.export_schedule_to_short_sheet()
 
-            # date_labels, doctors, schedule = Processor.process_worksheet(worksheet)
-            # Processor.export_schedule_to_full_sheet(spreadsheet, worksheet, date_labels, doctors, schedule)
-            # Processor.export_schedule_to_short_sheet(spreadsheet, worksheet, date_labels, doctors, schedule)
-
             # Przywracamy stdout
             sys.stdout = old_stdout
 
@@ -134,7 +125,6 @@ def GenerateScheduleButtonWithAction( spreadsheet, worksheet ) :
 
 TitleDescription()
 gc, user_email = GetCredentials() # this will rerun if credentials are wrong
-# if we are here, credentials are fine
 if gc != None :
     spreadsheet, worksheet = ChooseWorksheet( gc, user_email )
     if spreadsheet != None :

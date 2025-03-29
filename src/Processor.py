@@ -6,22 +6,13 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 from gspread_formatting import CellFormat, TextFormat, format_cell_ranges
+import Params
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
 client = gspread.authorize(creds)
 
 # Domyślne wartości
-DEFAULT_MIN = 0
-DEFAULT_PREFERRED = 3
-DEFAULT_MAX = 10000
-DAY_COST = 1000
-BASE_COST = 1000
-COST_WILLING = 970
-COST_UNWILLING = 1030
-COST_VOID = 100000
-COST_WRONG_FREQUENCY = 1
-COST_NOT_PREFERRED_SHIFTS = 100
 
 
 def parse_int_with_default(values, default):
@@ -66,15 +57,17 @@ class Processor :
         self.doctors.append("Void")
         
         # Wiersze danych z domyślną obsługą braków
-        self.min_shifts = dict(zip(self.doctors, parse_int_with_default(data[1][1:], DEFAULT_MIN)))
-        self.preferred_shifts = dict(zip(self.doctors, parse_int_with_default(data[2][1:], DEFAULT_PREFERRED)))
-        self.max_shifts = dict(zip(self.doctors, parse_int_with_default(data[3][1:], DEFAULT_MAX)))
-
-        prefer_sparse     = dict(zip(self.doctors, [val.upper() == 'TRUE' for val in data[6][1:]]))
-        prefer_dense      = dict(zip(self.doctors, [val.upper() == 'TRUE' for val in data[7][1:]]))
+        self.enabled = dict(zip(self.doctors, [val.upper() == 'TRUE' for val in data[1][1:]]))
+        self.min_shifts = dict(zip(self.doctors, parse_int_with_default(data[2][1:], Params.DEFAULT_MIN)))
+        self.preferred_shifts = dict(zip(self.doctors, parse_int_with_default(data[3][1:], Params.NO_PREFERENCE)))
+        self.max_shifts = dict(zip(self.doctors, parse_int_with_default(data[4][1:], Params.DEFAULT_MAX_SHIFTS)))
+        self.preferred_shifts_weekday = dict(zip(self.doctors, parse_int_with_default(data[5][1:], Params.NO_PREFERENCE)))
+        self.preferred_shifts_weekend = dict(zip(self.doctors, parse_int_with_default(data[6][1:], Params.NO_PREFERENCE)))
+        prefer_sparse     = dict(zip(self.doctors, [val.upper() == 'TRUE' for val in data[7][1:]]))
+        prefer_dense      = dict(zip(self.doctors, [val.upper() == 'TRUE' for val in data[8][1:]]))
 
         day_index = 0
-        for row in data[8:]:
+        for row in data[9:]:
             if not any(cell.strip() for cell in row):
                 continue  # pomiń puste wiersze
 
@@ -106,15 +99,12 @@ class Processor :
                 #     fixed_shifts[(doctor, day_index)] = "."
 
                 if value == "chętnie":
-                    self.day_cost[(doctor, day_index)] = COST_WILLING
+                    self.day_cost[(doctor, day_index)] = Params.BASE_COST - Params.PENALTY_MODIFIER_WILLING
                 elif value == "niechętnie":
-                    self.day_cost[(doctor, day_index)] = COST_UNWILLING
+                    self.day_cost[(doctor, day_index)] = Params.BASE_COST + Params.PENALTY_MODIFIER_WILLING
                 else:
-                    self.day_cost[(doctor, day_index)] = BASE_COST
+                    self.day_cost[(doctor, day_index)] = Params.BASE_COST
             
-            # fixed_shifts[("Void",day_index)] = "."
-            # day_cost[("Void",day_index)] = COST_VOID
-
             day_index += 1
 
         self.days = list(range(day_index))
@@ -122,22 +112,40 @@ class Processor :
         for d in self.doctors:
             for day in self.days:
                 if (d, day) not in self.day_cost or self.day_cost[(d,day)] == None:
-                    self.day_cost[(d, day)] = BASE_COST
-
-        # Pozostałe stałe:
-        cost_per_dense_window = 1
-        cost_per_sparse_window = 1
+                    self.day_cost[(d, day)] = Params.BASE_COST
 
         # Dodajemy sztucznego lekarza Void
-
         # Parametry dla Void-a
         self.min_shifts["Void"] = 0
         self.preferred_shifts["Void"] = 0
-        self.max_shifts["Void"] = 10000
+        self.preferred_shifts_weekday["Void"] = Params.NO_PREFERENCE
+        self.preferred_shifts_weekend["Void"] = Params.NO_PREFERENCE
+        self.max_shifts["Void"] = Params.DEFAULT_MAX_SHIFTS
         prefer_dense["Void"] = False
         prefer_sparse["Void"] = False
 
+        # Usuń lekarzy wyłączonych z grafiku
+        disabled_doctors = [d for d in self.doctors if not self.enabled.get(d, True)]
+        for d in disabled_doctors:
+            self.doctors.remove(d)
+            self.min_shifts.pop(d, None)
+            self.preferred_shifts.pop(d, None)
+            self.preferred_shifts_weekday.pop(d, None)
+            self.preferred_shifts_weekend.pop(d, None)
+            self.max_shifts.pop(d, None)
+            prefer_dense.pop(d, None)
+            prefer_sparse.pop(d, None)
+            # Usuwanie złożonych struktur
+            self.fixed_shifts = {
+                k: v for k, v in self.fixed_shifts.items() if k[0] != d
+            }
+            self.day_cost = {
+                k: v for k, v in self.day_cost.items() if k[0] != d
+            }        
+
         model = SchedulerModel()
+
+        weekend_param = {day: val for day, val in zip(self.days, self.weekend)}
 
         model.set_data(
             doctors = self.doctors,
@@ -146,12 +154,12 @@ class Processor :
             min_shifts = self.min_shifts,
             max_shifts = self.max_shifts,
             preferred_shifts = self.preferred_shifts,
+            preferred_shifts_weekday = self.preferred_shifts_weekday,
+            preferred_shifts_weekend = self.preferred_shifts_weekend,
             prefer_dense = prefer_dense,
             prefer_sparse = prefer_sparse,
-            cost_per_dense_window = COST_WRONG_FREQUENCY,
-            cost_per_sparse_window = COST_WRONG_FREQUENCY,
-            penalty_for_not_preferred_shifts = COST_NOT_PREFERRED_SHIFTS,
-            fixed_shifts = self.fixed_shifts )
+            fixed_shifts = self.fixed_shifts,
+            weekend_param = weekend_param )
         
         for d in self.doctors:
             missing = [day for day in self.days if (d, day) not in self.day_cost]
