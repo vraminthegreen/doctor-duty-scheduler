@@ -5,11 +5,8 @@ from oauth2client.service_account import ServiceAccountCredentials
 import Processor
 from io import StringIO
 import sys
+import os
 
-# to run: python3 -m streamlit run app.py
-
-# TODO: opis debugowania rozkladu dla usera (przez wylaczanie lekarzy)
-# TODO: mail do autora
 
 
 def TitleDescription() :
@@ -126,6 +123,8 @@ def GenerateScheduleButtonWithAction( spreadsheet, worksheet ) :
         except Exception as e:
             sys.stdout = old_stdout  # upewniamy się że stdout wróci
             st.error(f"Something went wrong: {e}")                
+
+os.environ["AMPL_LICENSE_FILE"] = os.path.abspath("ampl_license/ampl.lic")
 
 TitleDescription()
 gc, user_email = GetCredentials() # this will rerun if credentials are wrong

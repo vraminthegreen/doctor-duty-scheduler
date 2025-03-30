@@ -33,6 +33,16 @@ Originally created for a neonatal hospital department in Poland, the tool helps 
 
 ---
 
+// TODO: ampl community
+// TODO: przykładowy arkusz
+// TODO: sekcja DEMO: 
+// link do apki: https://doctor-duty-scheduler.streamlit.app
+// TODO: licencja
+// TODO: opis debugowania rozkladu dla usera (przez wylaczanie lekarzy)
+// TODO: mail do autora
+
+
+
 ## 🚀 Getting Started
 
 ### 1. Clone the Repository
