@@ -8,7 +8,6 @@ import sys
 
 # to run: python3 -m streamlit run app.py
 
-# TODO: github
 # TODO: opis debugowania rozkladu dla usera (przez wylaczanie lekarzy)
 # TODO: mail do autora
 
@@ -68,6 +67,11 @@ def GetCredentials() :
         user_email = st.session_state["user_email"]
     return gc, user_email
 
+# def Authorize() :
+#     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+#     creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+#     client = gspread.authorize(creds)
+#     return client
 
 def ChooseWorksheet( gc, user_email ) :
     st.header("📄 2. Choose Spreadsheet")

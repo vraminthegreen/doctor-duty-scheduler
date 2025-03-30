@@ -8,10 +8,6 @@ from datetime import datetime
 from gspread_formatting import CellFormat, TextFormat, format_cell_ranges
 import Params
 
-scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
-client = gspread.authorize(creds)
-
 # Domyślne wartości
 
 
@@ -38,7 +34,7 @@ def parse_date_flex(date_str):
 
 class Processor :
 
-    def __init__(self):
+    def __init__(self ):
         self.fixed_shifts = {}  # (doctor, day_index) -> "0" / "1"
         self.day_cost = {}
         self.date_labels = []
@@ -254,7 +250,7 @@ class Processor :
 
         format_cell_ranges(result_sheet, ranges_to_format)
 
-def process_spreadsheets() :
+def process_spreadsheets( client ) :
     # sheet = client.open("Graf Lekarzy").worksheet("Dane")  # Arkusz musi istnieć
     print("Spreadsheets:")
     for ss in client.openall():
@@ -269,5 +265,5 @@ def process_spreadsheets() :
 
 if __name__ == "__main__":
     print("Alive")
-    process_spreadsheets()
+    # process_spreadsheets()
 
