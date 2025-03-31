@@ -125,13 +125,15 @@ def GenerateScheduleButtonWithAction( spreadsheet, worksheet ) :
             sys.stdout = old_stdout  # upewniamy się że stdout wróci
             st.error(f"Something went wrong: {e}")                
 
-# os.environ["AMPL_LICENSE_FILE"] = os.path.abspath("ampl_license/ampl.lic")
 # st.markdown("{}".format(st.secrets["ampl_lic"].split('\n')[0]))
 
 if "ampl_lic" in st.secrets:
     os.makedirs(".ampl", exist_ok=True)
     with open(".ampl/ampl.lic", "w") as f:
         f.write(st.secrets["ampl_lic"])
+        os.environ["AMPL_LICENSE_FILE"] = os.path.abspath(".ampl/ampl.lic")
+        st.markdown("AMPL configured")
+
 
 TitleDescription()
 gc, user_email = GetCredentials() # this will rerun if credentials are wrong
