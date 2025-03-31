@@ -20,7 +20,6 @@ def TitleDescription() :
     Developed and maintained pro bono by **Eryk Makowski**.
     """)
     
-    st.markdown("{}".format(st.secrets["ampl_lic"].split('\n')[0]))
 
 def GetCredentials() :
     gc = None
@@ -126,7 +125,13 @@ def GenerateScheduleButtonWithAction( spreadsheet, worksheet ) :
             sys.stdout = old_stdout  # upewniamy się że stdout wróci
             st.error(f"Something went wrong: {e}")                
 
-os.environ["AMPL_LICENSE_FILE"] = os.path.abspath("ampl_license/ampl.lic")
+# os.environ["AMPL_LICENSE_FILE"] = os.path.abspath("ampl_license/ampl.lic")
+# st.markdown("{}".format(st.secrets["ampl_lic"].split('\n')[0]))
+
+if "ampl_lic" in st.secrets:
+    os.makedirs(".ampl", exist_ok=True)
+    with open(".ampl/ampl.lic", "w") as f:
+        f.write(st.secrets["ampl_lic"])
 
 TitleDescription()
 gc, user_email = GetCredentials() # this will rerun if credentials are wrong
