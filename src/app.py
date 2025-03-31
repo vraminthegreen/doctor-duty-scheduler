@@ -132,7 +132,7 @@ if "ampl_lic" in st.secrets:
     with open(".ampl/ampl.lic", "w") as f:
         f.write(st.secrets["ampl_lic"])
         os.environ["AMPL_LICENSE_FILE"] = os.path.abspath(".ampl/ampl.lic")
-        modules.activate(st.secrets["ampl_lic"])
+        modules.activate(st.secrets["ampl_uuid"])
         # st.markdown("AMPL configured")
 
 
