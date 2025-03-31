@@ -19,6 +19,8 @@ def TitleDescription() :
     using constraint-based optimization powered by AMPL.  
     Developed and maintained pro bono by **Eryk Makowski**.
     """)
+    
+    st.markdown("{}".format(st.secrets["ampl_lic"].split('\n')[0]))
 
 def GetCredentials() :
     gc = None
