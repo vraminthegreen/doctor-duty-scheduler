@@ -87,16 +87,14 @@ class Processor :
                 doctor = self.doctors[i]
                 value = entry.strip().lower()
 
-                if value == "nie":
+                if value == "nie" or value == "must not" :
                     self.fixed_shifts[(doctor, day_index)] = "0"
-                elif value == "tak":
+                elif value == "tak" or value == "must" :
                     self.fixed_shifts[(doctor, day_index)] = "1"
-                # else :
-                #     fixed_shifts[(doctor, day_index)] = "."
-
-                if value == "chętnie":
+                    print("MUST: {}, {}".format(doctor, day_index) )
+                if value == "chętnie" or value == "willing" :
                     self.day_cost[(doctor, day_index)] = Params.BASE_COST - Params.PENALTY_MODIFIER_WILLING
-                elif value == "niechętnie":
+                elif value == "niechętnie" or value == "reluctant" :
                     self.day_cost[(doctor, day_index)] = Params.BASE_COST + Params.PENALTY_MODIFIER_WILLING
                 else:
                     self.day_cost[(doctor, day_index)] = Params.BASE_COST
@@ -186,7 +184,7 @@ class Processor :
         result_sheet = self.spreadsheet.add_worksheet(title=new_sheet_name, rows=str(num_rows), cols=str(num_cols))
 
         # Przygotuj nagłówek
-        header = ["Data"] + self.doctors
+        header = ["Date"] + self.doctors
         values = [header]
 
         # Upewnij się, że index0/index1 to kolumny, nie indeks
@@ -194,13 +192,19 @@ class Processor :
         # Budujemy macierz wyników (1 –> TAK, 0 –> "")
         for i, date in enumerate(self.date_labels):
             row = [date]
+            present = False
             for doctor in self.doctors:
                 val = self.schedule_df.loc[
                     (self.schedule_df["index0"] == doctor) & 
                     (self.schedule_df["index1"] == i), "x.val"
                 ]
-                row.append("TAK" if not val.empty and val.values[0] == 1 else "")
+                if not val.empty and val.values[0]==1 :
+                    present = True
+                row.append("YES" if not val.empty and val.values[0] == 1 else "")
             values.append(row)
+            if not present :
+                print("Suspicious row for date {}:".format(date))
+                print(self.schedule_df[self.schedule_df["index1"] == i])
 
         # Wpisujemy dane
         result_sheet.update(values)
@@ -219,7 +223,7 @@ class Processor :
         # Zakładamy, że schedule_df ma MultiIndex (doctor, day)
         self.schedule_df = self.schedule_df.reset_index()
 
-        values = [["Data", "Dyżurny"]]
+        values = [["Date", "On-call"]]
 
         for i, date in enumerate(self.date_labels):
             # Filtrujemy rząd z x.val == 1 dla danego dnia
