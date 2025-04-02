@@ -19,7 +19,20 @@ def TitleDescription() :
     using constraint-based optimization powered by AMPL.  
     Developed and maintained pro bono by **Eryk Makowski**.
     """)
-    
+    page = st.sidebar.radio("Navigation", ["Main", "Instructions", "Example"])
+
+    if page == "Instructions":
+        with open("docs/INSTRUCTIONS.md", "r", encoding="utf-8") as f:
+            instructions_md = f.read()
+            st.markdown(instructions_md, unsafe_allow_html=True)
+        st.stop()
+    elif page == "Example" :
+        with open("docs/EXAMPLE.md", "r", encoding="utf-8") as f:
+            example_md = f.read()
+            st.markdown(example_md, unsafe_allow_html=True)
+        st.stop()    
+
+
 
 def GetCredentials() :
     gc = None

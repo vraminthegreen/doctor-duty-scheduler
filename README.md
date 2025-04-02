@@ -40,9 +40,12 @@ Originally created for a neonatal hospital department in Poland, the tool helps 
 // TODO: author's mail
 // TODO: constraints
 
+## 📘 User Instructions
 
+See full instructions here: [docs/INSTRUCTIONS.md](docs/INSTRUCTIONS.md)
+Example: [docs/EXAMPLE.md](docs/EXAMPLE.md)
 
-## 🚀 Getting Started
+## 🚀 Getting Started (for Developers)
 
 ### 1. Clone the Repository
 
