@@ -36,15 +36,15 @@ class SchedulerModel:
         set WINDOW_STARTS within DAYS;
 
         minimize Total_Cost:
-            # 1. Koszt podstawowy
+            # 1. Basic cost
             sum {d in DOCTORS, day in DAYS} day_cost[d, day] * x[d, day]
 
-            # 2. Kara za odchylenie od preferred_shifts
+            # Penalty for deviation from preferred_shifts
             + sum {d in DOCTORS : preferred_shifts[d] >= 0}
                 penalty_for_not_preferred_shifts *
                 abs(sum {day in DAYS} x[d, day] - preferred_shifts[d])
 
-            # 3. Kara za weekday/weekend
+            # 3. Penalty for deviation from peferred weekday
             + sum {d in DOCTORS : preferred_shifts_weekday[d] >= 0}
                 penalty_for_not_preferred_shifts *
                 abs(sum {day in DAYS : weekend[day] = 0} x[d, day] - preferred_shifts_weekday[d])
@@ -59,7 +59,7 @@ class SchedulerModel:
                 penalty_for_excess_weekend_shift *
                 max(0, sum {day in DAYS : weekend[day] = 1} x[d, day] - preferred_shifts_weekend[d])
                        
-            # 4. Bonus/kara za gęstość lub rzadkość w 5-dniowym oknie
+            # 4. dense/sparse penalties
             - sum {d in DOCTORS, t in WINDOW_STARTS}
                 (if prefer_dense[d] = 1 and sum {k in 0..4} x[d, t + k] >= 2
                 then cost_per_dense_window

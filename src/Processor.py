@@ -11,9 +11,12 @@ import Params
 # Domyślne wartości
 
 
-def parse_int_with_default(values, default):
-    return [int(v) if v.strip().isdigit() else default for v in values]
-
+def parse_int_with_default(val, default):
+    try:
+        return int(val)
+    except:
+        return default
+    
 def parse_date_flex(date_str):
     # Usuń spacje, zamień nietypowe separatory na '-'
     cleaned = ''.join(c if c.isalnum() else '-' for c in date_str.strip())
@@ -40,32 +43,67 @@ class Processor :
         self.date_labels = []
         self.dates = []
         self.weekend = []
+        self.log = lambda l : print(l)
 
-    def process_worksheet( self, spreadsheet, worksheet ) :
+    def set_logging( self, logging ) :
+        self.log = logging
 
-        # Wczytaj dane jako lista list
+    def load_worksheet( self, spreadsheet, worksheet ) :
+        self.log("Loading worksheet ...")
+        # Read data as list of lists
         self.spreadsheet = spreadsheet
         self.worksheet = worksheet
         data = worksheet.get_all_values()
 
-        # Identyfikatory lekarzy (nagłówek, pierwsza kolumna pomijamy)
+        # Doctor identifiers (we skip the first header column)
         self.doctors = data[0][1:]
         self.doctors.append("Void")
-        
-        # Wiersze danych z domyślną obsługą braków
-        self.enabled = dict(zip(self.doctors, [val.upper() == 'TRUE' for val in data[1][1:]]))
-        self.min_shifts = dict(zip(self.doctors, parse_int_with_default(data[2][1:], Params.DEFAULT_MIN)))
-        self.preferred_shifts = dict(zip(self.doctors, parse_int_with_default(data[3][1:], Params.NO_PREFERENCE)))
-        self.max_shifts = dict(zip(self.doctors, parse_int_with_default(data[4][1:], Params.DEFAULT_MAX_SHIFTS)))
-        self.preferred_shifts_weekday = dict(zip(self.doctors, parse_int_with_default(data[5][1:], Params.NO_PREFERENCE)))
-        self.preferred_shifts_weekend = dict(zip(self.doctors, parse_int_with_default(data[6][1:], Params.NO_PREFERENCE)))
-        prefer_sparse     = dict(zip(self.doctors, [val.upper() == 'TRUE' for val in data[7][1:]]))
-        prefer_dense      = dict(zip(self.doctors, [val.upper() == 'TRUE' for val in data[8][1:]]))
 
+        self.enabled = {}
+        self.min_shifts = {}
+        self.preferred_shifts = {}
+        self.max_shifts = {}
+        self.preferred_shifts_weekday = {}
+        self.preferred_shifts_weekend = {}
+        self.prefer_sparse = {}
+        self.prefer_dense = {}
+
+        # Recognized parameter rows mapped to variables and parsers
+        param_rows = {
+            "enabled": (self.enabled, lambda val: val.upper() == 'TRUE'),
+            "min_shifts": (self.min_shifts, lambda val: parse_int_with_default(val, Params.DEFAULT_MIN)),
+            "preferred_shifts": (self.preferred_shifts, lambda val: parse_int_with_default(val, Params.NO_PREFERENCE)),
+            "max_shifts": (self.max_shifts, lambda val: parse_int_with_default(val, Params.DEFAULT_MAX_SHIFTS)),
+            "preferred_shifts_weekday": (self.preferred_shifts_weekday, lambda val: parse_int_with_default(val, Params.NO_PREFERENCE)),
+            "preferred_shifts_weekend": (self.preferred_shifts_weekend, lambda val: parse_int_with_default(val, Params.NO_PREFERENCE)),
+            "prefer_sparse": (self.prefer_sparse, lambda val: val.upper() == 'TRUE'),
+            "prefer_dense": (self.prefer_dense, lambda val: val.upper() == 'TRUE'),
+            "validation_result": (None, None)  # handled separately
+        }
+
+        # Dynamically parse parameter rows by header
+        self.param_row_indices = {}
+        start_of_schedule = None
+        for i, row in enumerate(data[1:], start=1):
+            label = row[0].strip().lower()
+            if label in param_rows:
+                self.param_row_indices[label] = i
+                target, parser = param_rows[label]
+                if target is not None:
+                    target.update(zip(self.doctors, [parser(val) for val in row[1:]]))
+            else:
+                start_of_schedule = i
+                break  # First unrecognized label = start of scheduling rows
+
+        self.validation_result_row_index = self.param_row_indices.get("validation_result", None)
+
+        if start_of_schedule is None:
+            raise Exception("No schedule section found in the worksheet")
+        
         day_index = 0
-        for row in data[9:]:
+        for row in data[start_of_schedule:]:
             if not any(cell.strip() for cell in row):
-                continue  # pomiń puste wiersze
+                continue  # skip empty rows
 
             date_str = row[0].strip()
             if not date_str:
@@ -108,17 +146,75 @@ class Processor :
                 if (d, day) not in self.day_cost or self.day_cost[(d,day)] == None:
                     self.day_cost[(d, day)] = Params.BASE_COST
 
-        # Dodajemy sztucznego lekarza Void
-        # Parametry dla Void-a
+        # add Void doctor with parameters
         self.min_shifts["Void"] = 0
         self.preferred_shifts["Void"] = 0
         self.preferred_shifts_weekday["Void"] = Params.NO_PREFERENCE
         self.preferred_shifts_weekend["Void"] = Params.NO_PREFERENCE
         self.max_shifts["Void"] = Params.DEFAULT_MAX_SHIFTS
-        prefer_dense["Void"] = False
-        prefer_sparse["Void"] = False
+        self.prefer_dense["Void"] = False
+        self.prefer_sparse["Void"] = False
 
-        # Usuń lekarzy wyłączonych z grafiku
+    def validate_log(self, doc, message) :
+        idx = self.doctor_index.get(doc)
+        if idx is not None:
+            if self.validation_row[idx]:
+                self.validation_row[idx] += "\n"
+            self.validation_row[idx] += message
+
+    def validate_disabled_doctors( self ) :    
+        for doc in self.doctors[:-1]:
+            if not self.enabled.get(doc, True):
+                self.validate_log(doc, "⚠️ doctor disabled")
+
+    def validate_shift_ranges(self):
+        for doc in self.doctors[:-1]:
+            min_val = self.min_shifts.get(doc)
+            preferred_val = self.preferred_shifts.get(doc)
+            max_val = self.max_shifts.get(doc)
+
+            if min_val > max_val:
+                self.validate_log(doc, f"🚫 min > max ({min_val} > {max_val})")
+
+            if preferred_val is not None and preferred_val >= 0:
+                if min_val > preferred_val:
+                    self.validate_log(doc, f"⚠️ min > preferred ({min_val} > {preferred_val})")
+
+            if preferred_val is not None and preferred_val >= 0:
+                if preferred_val > max_val:
+                    self.validate_log(doc, f"⚠️ preferred > max ({preferred_val} > {max_val})")
+
+    def validate_input(self):
+        self.log("Validate input ...")
+        if self.validation_result_row_index is None:
+            self.log("WARNING: validation row missing")
+            return  # No validation row to write into
+
+        num_columns = len(self.doctors)
+        empty_row = ["validation_result"] + [""] * (num_columns - 1)
+        self.worksheet.update(
+            f"A{self.validation_result_row_index + 1}:{chr(65 + num_columns - 1)}{self.validation_result_row_index + 1}",
+            [empty_row]
+        )
+
+        # Initialize empty warning list for each doctor (excluding Void)
+        self.validation_row = ["validation_result"] + ["" for _ in self.doctors[:-1]]
+
+        # Build a map: doctor → column index in validation_row
+        self.doctor_index = {doc: i + 1 for i, doc in enumerate(self.doctors[:-1])}
+
+        # --- Individual validations ---
+
+        self.validate_disabled_doctors()
+        self.validate_shift_ranges()
+
+
+        self.worksheet.update(
+            f"A{self.validation_result_row_index + 1}:{chr(65 + num_columns - 1)}{self.validation_result_row_index + 1}",
+            [self.validation_row]
+        )
+
+    def remove_disabled_doctors(self) :
         disabled_doctors = [d for d in self.doctors if not self.enabled.get(d, True)]
         for d in disabled_doctors:
             self.doctors.remove(d)
@@ -127,16 +223,16 @@ class Processor :
             self.preferred_shifts_weekday.pop(d, None)
             self.preferred_shifts_weekend.pop(d, None)
             self.max_shifts.pop(d, None)
-            prefer_dense.pop(d, None)
-            prefer_sparse.pop(d, None)
-            # Usuwanie złożonych struktur
+            self.prefer_dense.pop(d, None)
+            self.prefer_sparse.pop(d, None)
             self.fixed_shifts = {
                 k: v for k, v in self.fixed_shifts.items() if k[0] != d
             }
             self.day_cost = {
                 k: v for k, v in self.day_cost.items() if k[0] != d
-            }        
+            }      
 
+    def solve_model( self ) :
         model = SchedulerModel()
 
         weekend_param = {day: val for day, val in zip(self.days, self.weekend)}
@@ -150,8 +246,8 @@ class Processor :
             preferred_shifts = self.preferred_shifts,
             preferred_shifts_weekday = self.preferred_shifts_weekday,
             preferred_shifts_weekend = self.preferred_shifts_weekend,
-            prefer_dense = prefer_dense,
-            prefer_sparse = prefer_sparse,
+            prefer_dense = self.prefer_dense,
+            prefer_sparse = self.prefer_sparse,
             fixed_shifts = self.fixed_shifts,
             weekend_param = weekend_param )
         
@@ -166,6 +262,12 @@ class Processor :
         print("Total Cost:", model.get_total_cost())
         print("Server log:", model.get_server_log())
         self.schedule_df = model.get_schedule()
+
+    def process_worksheet( self, spreadsheet, worksheet ) :
+        self.load_worksheet( spreadsheet, worksheet )
+        self.validate_input()
+        self.remove_disabled_doctors()
+        self.solve_model()
 
     def export_schedule_to_full_sheet(self):
         # Nowa nazwa zakładki
@@ -255,7 +357,7 @@ class Processor :
 
         format_cell_ranges(result_sheet, ranges_to_format)
 
-def process_spreadsheets( client ) :
+def process_spreadsheets( client, logging ) :
     # sheet = client.open("Graf Lekarzy").worksheet("Dane")  # Arkusz musi istnieć
     print("Spreadsheets:")
     for ss in client.openall():
@@ -264,6 +366,7 @@ def process_spreadsheets( client ) :
             if worksheet.title.endswith("-sched") : continue
             print(f"        🗂️ Processing sheet: {worksheet.title}")
             processor = Processor()
+            processor.set_logging( logging )
             processor.process_worksheet( ss, worksheet )
             processor.export_schedule_to_full_sheet()
             processor.export_schedule_to_short_sheet()

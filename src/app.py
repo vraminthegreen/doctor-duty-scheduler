@@ -122,6 +122,8 @@ def GenerateScheduleButtonWithAction( spreadsheet, worksheet ) :
 
             # Uruchamiamy przetwarzanie
             processor = Processor.Processor()
+            logging = lambda l : st.text(l)
+            processor.set_logging( logging )
             processor.process_worksheet( spreadsheet, worksheet )
             processor.export_schedule_to_full_sheet()
             processor.export_schedule_to_short_sheet()
