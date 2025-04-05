@@ -6,6 +6,9 @@ class SchedulerModel:
     def __init__(self):
         self.ampl = AMPL()
         self.ampl.setOption("solver", "highs")
+        self.ampl.setOption('presolve', 10)
+        self.ampl.setOption('show_stats', 7)
+        self.ampl.option["highs_options"] = "outlev=1"
         self._build_model()
 
     def _build_model(self):
@@ -115,11 +118,15 @@ class SchedulerModel:
         self.ampl.param['weekend'].setValues(weekend_param)
 
     def solve(self):
-        self.ampl.solve()
+        # self.ampl.solve()
+        self.solver_log = self.ampl.get_output("solve;")
 
     def get_schedule(self):
         return self.ampl.getVariable("x").to_pandas()
 
     def get_total_cost(self):
         return self.ampl.getObjective("Total_Cost").value()
+    
+    def get_server_log(self) :
+        return self.solver_log
     

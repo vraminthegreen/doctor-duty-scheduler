@@ -33,13 +33,6 @@ Originally created for a neonatal hospital department in Poland, the tool helps 
 
 ---
 
-// TODO: share the example spreadsheet
-// TODO: DEMO section
-// app link: https://doctor-duty-scheduler.streamlit.app
-// TODO: debugging description (disabling doctors)
-// TODO: author's mail
-// TODO: constraints
-
 ## 📘 User Instructions
 
 See full instructions here: [docs/INSTRUCTIONS.md](docs/INSTRUCTIONS.md)
@@ -98,4 +91,9 @@ Developed and maintained pro bono by **Eryk Makowski** 🇵🇱
 ## 🧪 License
 
 This project is non-commercial and designed for internal hospital use. If you're interested in expanding or commercializing it, feel free to get in touch.
+
+// app link: https://doctor-duty-scheduler.streamlit.app
+// TODO: autokolorowanie weekendów
+// TODO: author's mail
+// TODO: constraints
 

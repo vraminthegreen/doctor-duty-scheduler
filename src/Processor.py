@@ -164,6 +164,7 @@ class Processor :
 
         print(model.get_schedule())
         print("Total Cost:", model.get_total_cost())
+        print("Server log:", model.get_server_log())
         self.schedule_df = model.get_schedule()
 
     def export_schedule_to_full_sheet(self):
