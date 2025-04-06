@@ -7,6 +7,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 from gspread_formatting import CellFormat, TextFormat, format_cell_ranges
 import Params
+from collections import Counter
+from datetime import timedelta
+
 
 # Domyślne wartości
 
@@ -144,7 +147,7 @@ class Processor :
         for d in self.doctors:
             for day in self.days:
                 if (d, day) not in self.day_cost or self.day_cost[(d,day)] == None:
-                    self.day_cost[(d, day)] = Params.BASE_COST
+                    self.day_cost[(d, day)] = 100 * Params.BASE_COST if d == "Void" else Params.BASE_COST
 
         # add Void doctor with parameters
         self.min_shifts["Void"] = 0
@@ -174,15 +177,91 @@ class Processor :
             max_val = self.max_shifts.get(doc)
 
             if min_val > max_val:
-                self.validate_log(doc, f"🚫 min > max ({min_val} > {max_val})")
+                self.validate_log(doc, f"🚫 min_shifts > max_shifts ({min_val} > {max_val})")
 
             if preferred_val is not None and preferred_val >= 0:
                 if min_val > preferred_val:
-                    self.validate_log(doc, f"⚠️ min > preferred ({min_val} > {preferred_val})")
+                    self.validate_log(doc, f"⚠️ min_shifts > preferred_shifts ({min_val} > {preferred_val})")
 
             if preferred_val is not None and preferred_val >= 0:
                 if preferred_val > max_val:
-                    self.validate_log(doc, f"⚠️ preferred > max ({preferred_val} > {max_val})")
+                    self.validate_log(doc, f"⚠️ preferred_shifts > max_shifts ({preferred_val} > {max_val})")
+
+    def validate_preference_conflict(self):
+        for doc in self.doctors[:-1]:  # skip 'Void'
+            ps = self.preferred_shifts.get(doc, Params.NO_PREFERENCE)
+            psw = self.preferred_shifts_weekday.get(doc, Params.NO_PREFERENCE)
+            pswe = self.preferred_shifts_weekend.get(doc, Params.NO_PREFERENCE)
+            count = sum(p != Params.NO_PREFERENCE for p in [ps, psw, pswe])
+            if count > 2:
+                self.validate_log(doc, "🚫 conflicting preferred_shifts/preferred_shifts_weekday/preferred_shifts_weekend settings")
+
+    def validate_sparse_dense_conflict(self):
+        for doc in self.doctors[:-1]:  # skip 'Void'
+            if self.prefer_sparse.get(doc, False) and self.prefer_dense.get(doc, False):
+                self.validate_log(doc, "🚫 both sparse and dense preferences set")
+
+    def validate_minimum_active_doctors(self, minimum_required=3):
+        active_doctors = [doc for doc in self.doctors[:-1] if self.enabled.get(doc, True)]
+        if len(active_doctors) < minimum_required:
+            for doc in self.doctors[:-1]:
+                self.validate_log(doc, f"🚫 not enough active doctors ({len(active_doctors)} total)")
+
+    def validate_duplicate_doctor_names(self):
+        name_counts = Counter(self.doctors[:-1])  # pomijamy "Void"
+        for i, doc in enumerate(self.doctors[:-1]):
+            if name_counts[doc] > 1:
+                self.validate_log(doc, "🚫 duplicate name") 
+
+    def validate_dates(self):
+        if not self.dates:
+            return
+
+        # 1. Nieparsowalne daty
+        for i, date in enumerate(self.dates):
+            if date is None:
+                self.log(f"🚫 unparseable date: {self.date_labels[i]}")
+
+        # 2. Sprawdzenie ciągłości
+        parsed_dates = [d for d in self.dates if d is not None]
+        parsed_dates_sorted = sorted(parsed_dates)
+        missing_days = []
+        for i in range(1, len(parsed_dates_sorted)):
+            expected = parsed_dates_sorted[i - 1] + timedelta(days=1)
+            if parsed_dates_sorted[i] != expected:
+                # Szukamy wszystkich brakujących dni między datami
+                current = expected
+                while current < parsed_dates_sorted[i]:
+                    missing_days.append(current)
+                    current += timedelta(days=1)
+
+        if missing_days:
+            missing_str = ", ".join(d.strftime("%Y-%m-%d") for d in missing_days)
+            self.log(f"⚠️ Missing dates in schedule: {missing_str}")
+
+    def validate_min_feasibility(self):
+        for doctor in self.doctors[:-1]:
+            if not self.enabled.get(doctor, True):
+                continue
+            min_required = self.min_shifts.get(doctor, 0)
+            if min_required <= 0:
+                continue
+            possible = 0
+            day = 0
+            while day < len(self.days):
+                while day < len(self.days):
+                    val = self.fixed_shifts.get((doctor, day), ".")
+                    if val != "0":
+                        break
+                    day += 1
+                if day >= len(self.days):
+                    break
+                possible += 1
+                if possible >= min_required:
+                    break
+                day += 3
+            if possible < min_required:
+                self.validate_log(doctor, f"🚫 only {possible} feasible days for min={min_required}")            
 
     def validate_input(self):
         self.log("Validate input ...")
@@ -203,11 +282,14 @@ class Processor :
         # Build a map: doctor → column index in validation_row
         self.doctor_index = {doc: i + 1 for i, doc in enumerate(self.doctors[:-1])}
 
-        # --- Individual validations ---
-
         self.validate_disabled_doctors()
         self.validate_shift_ranges()
-
+        self.validate_preference_conflict()
+        self.validate_sparse_dense_conflict()
+        self.validate_minimum_active_doctors()
+        self.validate_duplicate_doctor_names()
+        self.validate_dates()
+        self.validate_min_feasibility()
 
         self.worksheet.update(
             f"A{self.validation_result_row_index + 1}:{chr(65 + num_columns - 1)}{self.validation_result_row_index + 1}",
@@ -270,29 +352,26 @@ class Processor :
         self.solve_model()
 
     def export_schedule_to_full_sheet(self):
-        # Nowa nazwa zakładki
+        # new worksheet name
         print("Doctors: {}".format(self.doctors))
         new_sheet_name = f"{self.worksheet.title}-full-sched"
 
-        # Sprawdź, czy zakładka już istnieje – jeśli tak, usuń
+        # if worksheet exists - remove it
         try:
             existing = self.spreadsheet.worksheet(new_sheet_name)
             self.spreadsheet.del_worksheet(existing)
         except:
-            pass  # nie istnieje, to dobrze
+            pass
 
-        # Utwórz nowy worksheet o odpowiednim rozmiarze
-        num_rows = len(self.date_labels) + 1  # +1 na nagłówek
-        num_cols = len(self.doctors) + 1      # +1 na kolumnę z datą
+        # create adequately sized worksheet
+        num_rows = len(self.date_labels) + 1
+        num_cols = len(self.doctors) + 1
         result_sheet = self.spreadsheet.add_worksheet(title=new_sheet_name, rows=str(num_rows), cols=str(num_cols))
 
-        # Przygotuj nagłówek
         header = ["Date"] + self.doctors
         values = [header]
 
-        # Upewnij się, że index0/index1 to kolumny, nie indeks
         self.schedule_df = self.schedule_df.reset_index()
-        # Budujemy macierz wyników (1 –> TAK, 0 –> "")
         for i, date in enumerate(self.date_labels):
             row = [date]
             present = False
@@ -309,7 +388,6 @@ class Processor :
                 print("Suspicious row for date {}:".format(date))
                 print(self.schedule_df[self.schedule_df["index1"] == i])
 
-        # Wpisujemy dane
         result_sheet.update(values)
         self.format_weekends( result_sheet )
         print(f"✅ Exported schedule to full sheet: {new_sheet_name}")
