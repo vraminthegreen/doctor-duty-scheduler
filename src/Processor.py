@@ -147,7 +147,7 @@ class Processor :
         for d in self.doctors:
             for day in self.days:
                 if (d, day) not in self.day_cost or self.day_cost[(d,day)] == None:
-                    self.day_cost[(d, day)] = 100 * Params.BASE_COST if d == "Void" else Params.BASE_COST
+                    self.day_cost[(d, day)] = 10 * Params.BASE_COST if d == "Void" else Params.BASE_COST
 
         # add Void doctor with parameters
         self.min_shifts["Void"] = 0
@@ -157,6 +157,9 @@ class Processor :
         self.max_shifts["Void"] = Params.DEFAULT_MAX_SHIFTS
         self.prefer_dense["Void"] = False
         self.prefer_sparse["Void"] = False
+
+        print("day_cost for {}: {}".format(self.doctors[0],
+            [ self.day_cost.get((self.doctors[0], day), None) for day in self.days ]))
 
     def validate_log(self, doc, message) :
         idx = self.doctor_index.get(doc)
