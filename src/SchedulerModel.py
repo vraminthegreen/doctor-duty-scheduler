@@ -5,10 +5,9 @@ import Params
 class SchedulerModel:
     def __init__(self):
         self.ampl = AMPL()
-        self.ampl.setOption("solver", "highs")
         # self.ampl.setOption("solver", "scip")  # dla SCIP
         # self.ampl.option["scip_options"] = "display/verblevel=4"
-        # self.ampl.setOption("solver", "copt")  # dla COPT (jeśli masz licencję)        
+        self.ampl.setOption("solver", "highs")
         self.ampl.setOption('presolve', 10)
         # self.ampl.setOption('presolve', 0)
         self.ampl.setOption('show_stats', 7)
