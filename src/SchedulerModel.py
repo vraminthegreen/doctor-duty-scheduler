@@ -35,7 +35,6 @@ class SchedulerModel:
         param fixed_shift {DOCTORS, DAYS} symbolic default ".";
         param weekend {DAYS} binary;
         var x {DOCTORS, DAYS} binary;
-        set REST_WINDOW_STARTS within DAYS;
         set WINDOW_STARTS within DAYS;
 
         minimize Total_Cost:
@@ -82,8 +81,10 @@ class SchedulerModel:
         subject to Max_Shifts {d in DOCTORS diff {"Void"}}:
             sum {day in DAYS} x[d, day] <= max_shifts[d];
 
-        subject to Min_Rest_Period {d in DOCTORS diff {"Void"}, day in REST_WINDOW_STARTS}:
-            x[d, day] + x[d, day + 1] + x[d, day + 2] <= 1;
+        # at least 2 days of rest between shifts; pairs of manually fixed shifts are exempt
+        subject to Min_Rest_Period {d in DOCTORS diff {"Void"}, day in DAYS, k in 1..2:
+                day + k in DAYS and not (fixed_shift[d, day] = "1" and fixed_shift[d, day + k] = "1")}:
+            x[d, day] + x[d, day + k] <= 1;
 
         subject to Fixed_Shifts_Zero {d in DOCTORS, day in DAYS: fixed_shift[d, day] = "0"}:
             x[d, day] = 0;
@@ -102,7 +103,6 @@ class SchedulerModel:
         self.ampl.set['DAYS'] = days
 
         self.ampl.set['WINDOW_STARTS'] = list(range(max(days) - 3))
-        self.ampl.set['REST_WINDOW_STARTS'] = list(range(max(days) - 1))
 
         self.ampl.param['day_cost'].setValues(day_cost)
         self.ampl.param['min_shifts'].setValues(min_shifts)
@@ -126,6 +126,9 @@ class SchedulerModel:
 
     def get_schedule(self):
         return self.ampl.getVariable("x").to_pandas()
+
+    def get_solve_result(self):
+        return self.ampl.get_value("solve_result")
 
     def get_total_cost(self):
         return self.ampl.getObjective("Total_Cost").value()

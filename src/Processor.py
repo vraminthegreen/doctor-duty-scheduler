@@ -195,9 +195,9 @@ class Processor :
             ps = self.preferred_shifts.get(doc, Params.NO_PREFERENCE)
             psw = self.preferred_shifts_weekday.get(doc, Params.NO_PREFERENCE)
             pswe = self.preferred_shifts_weekend.get(doc, Params.NO_PREFERENCE)
-            count = sum(p != Params.NO_PREFERENCE for p in [ps, psw, pswe])
-            if count > 2:
-                self.validate_log(doc, "🚫 conflicting preferred_shifts/preferred_shifts_weekday/preferred_shifts_weekend settings")
+            all_set = all(p != Params.NO_PREFERENCE for p in [ps, psw, pswe])
+            if all_set and ps != psw + pswe:
+                self.validate_log(doc, f"🚫 preferred_shifts ({ps}) != preferred_shifts_weekday ({psw}) + preferred_shifts_weekend ({pswe})")
 
     def validate_sparse_dense_conflict(self):
         for doc in self.doctors[:-1]:  # skip 'Void'
@@ -242,6 +242,21 @@ class Processor :
             missing_str = ", ".join(d.strftime("%Y-%m-%d") for d in missing_days)
             self.log(f"⚠️ Missing dates in schedule: {missing_str}")
 
+    def manual_shift_days(self, doctor):
+        return [day for day in self.days if self.fixed_shifts.get((doctor, day)) == "1"]
+
+    def validate_manual_shift_spacing(self):
+        # manual shifts may be closer than the rest period - the model allows it, but warn
+        for doctor in self.doctors[:-1]:
+            if not self.enabled.get(doctor, True):
+                continue
+            manual = self.manual_shift_days(doctor)
+            for a, b in zip(manual, manual[1:]):
+                if b - a <= 2:
+                    message = f"⚠️ manual shifts too close: {self.date_labels[a]} & {self.date_labels[b]}"
+                    self.validate_log(doctor, message)
+                    self.log(f"{doctor}: {message}")
+
     def validate_min_feasibility(self):
         for doctor in self.doctors[:-1]:
             if not self.enabled.get(doctor, True):
@@ -249,20 +264,16 @@ class Processor :
             min_required = self.min_shifts.get(doctor, 0)
             if min_required <= 0:
                 continue
-            possible = 0
-            day = 0
-            while day < len(self.days):
-                while day < len(self.days):
-                    val = self.fixed_shifts.get((doctor, day), ".")
-                    if val != "0":
-                        break
-                    day += 1
-                if day >= len(self.days):
+            # manual shifts count as given; greedily add others respecting rest period
+            taken = self.manual_shift_days(doctor)
+            for day in self.days:
+                if len(taken) >= min_required:
                     break
-                possible += 1
-                if possible >= min_required:
-                    break
-                day += 3
+                if self.fixed_shifts.get((doctor, day), ".") == "0" or day in taken:
+                    continue
+                if all(abs(day - t) > 2 for t in taken):
+                    taken.append(day)
+            possible = len(taken)
             if possible < min_required:
                 self.validate_log(doctor, f"🚫 only {possible} feasible days for min={min_required}")            
 
@@ -292,6 +303,7 @@ class Processor :
         self.validate_minimum_active_doctors()
         self.validate_duplicate_doctor_names()
         self.validate_dates()
+        self.validate_manual_shift_spacing()
         self.validate_min_feasibility()
 
         self.worksheet.update(
@@ -346,7 +358,53 @@ class Processor :
         print(model.get_schedule())
         print("Total Cost:", model.get_total_cost())
         print("Server log:", model.get_server_log())
+        self.solve_result = model.get_solve_result()
         self.schedule_df = model.get_schedule()
+        self.find_schedule_problems()
+
+    def find_schedule_problems(self):
+        # solver output may break constraints when the model is infeasible - list what's wrong
+        self.day_problems = {}  # day index -> [messages]
+        self.doctor_problems = []
+        df = self.schedule_df.reset_index()
+        on_duty = df[(df["x.val"] > 0.5) & (df["index0"] != "Void")]
+        self.on_duty = {day: [] for day in self.days}
+        for doctor, day in zip(on_duty["index0"], on_duty["index1"]):
+            self.on_duty[day].append(doctor)
+
+        def problem(day, message):
+            self.day_problems.setdefault(day, []).append(message)
+
+        for day, doctors in self.on_duty.items():
+            if not doctors:
+                problem(day, "no doctor")
+            elif len(doctors) > 1:
+                problem(day, f"{len(doctors)} doctors on duty")
+            for doctor in doctors:
+                if self.fixed_shifts.get((doctor, day)) == "0":
+                    problem(day, f"{doctor}: MUST NOT day")
+
+        for (doctor, day), val in self.fixed_shifts.items():
+            if val == "1" and doctor in self.doctors and doctor not in self.on_duty[day]:
+                problem(day, f"{doctor}: MUST not assigned")
+
+        for doctor in self.doctors[:-1]:
+            days = sorted(day for day, doctors in self.on_duty.items() if doctor in doctors)
+            for a, b in zip(days, days[1:]):
+                manual_pair = self.fixed_shifts.get((doctor, a)) == "1" and self.fixed_shifts.get((doctor, b)) == "1"
+                if b - a <= 2 and not manual_pair:
+                    problem(b, f"{doctor}: too close to {self.date_labels[a]}")
+            if len(days) < self.min_shifts[doctor]:
+                self.doctor_problems.append(f"{doctor}: {len(days)} shifts < min {self.min_shifts[doctor]}")
+            if len(days) > self.max_shifts[doctor]:
+                self.doctor_problems.append(f"{doctor}: {len(days)} shifts > max {self.max_shifts[doctor]}")
+
+    def is_complete(self):
+        return self.solve_result == "solved" and not self.day_problems and not self.doctor_problems
+
+    def problem_report(self):
+        lines = [f"{self.date_labels[day]}: {'; '.join(msgs)}" for day, msgs in sorted(self.day_problems.items())]
+        return lines + self.doctor_problems
 
     def process_worksheet( self, spreadsheet, worksheet ) :
         self.load_worksheet( spreadsheet, worksheet )
@@ -404,20 +462,16 @@ class Processor :
         except:
             pass
 
-        # Zakładamy, że schedule_df ma MultiIndex (doctor, day)
-        self.schedule_df = self.schedule_df.reset_index()
-
-        values = [["Date", "On-call"]]
+        values = [["Date", "On-call"] + (["Problem"] if self.day_problems else [])]
 
         for i, date in enumerate(self.date_labels):
-            # Filtrujemy rząd z x.val == 1 dla danego dnia
-            row = self.schedule_df[(self.schedule_df["index1"] == i) & (self.schedule_df["x.val"] == 1)]
+            doctor = " / ".join(self.on_duty[i]) or "???"
+            row = [date, doctor]
+            if self.day_problems:
+                row.append("; ".join(self.day_problems.get(i, [])))
+            values.append(row)
 
-            # Sprawdź czy ktoś miał dyżur (teoretycznie zawsze powinien ktoś być)
-            doctor = row["index0"].values[0] if not row.empty else "???"
-            values.append([date, doctor])
-
-        result_sheet = self.spreadsheet.add_worksheet(title=new_sheet_name, rows=str(len(values)), cols="2")
+        result_sheet = self.spreadsheet.add_worksheet(title=new_sheet_name, rows=str(len(values)), cols=str(len(values[0])))
         result_sheet.update(values)
         self.format_weekends( result_sheet )
 

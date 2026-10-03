@@ -132,7 +132,16 @@ def GenerateScheduleButtonWithAction( spreadsheet, worksheet ) :
             sys.stdout = old_stdout
 
             # Wyświetlamy przechwycony output
-            st.success("✅ Schedule generated and exported successfully!")
+            if processor.is_complete():
+                st.success("✅ Schedule generated and exported successfully!")
+            else:
+                problems = "\n".join(f"- {line}" for line in processor.problem_report())
+                st.warning(
+                    f"⚠️ Incomplete schedule – partial success (solver status: {processor.solve_result}).\n\n"
+                    "Not all constraints could be satisfied. Problems found "
+                    "(also listed in the Problem column of the short schedule):\n\n"
+                    f"{problems}\n\n"
+                    "Fix these days manually, or correct the input (see the validation_result row) and generate again.")
             with st.expander("📋 Output log"):
                 st.text(mystdout.getvalue())
 
